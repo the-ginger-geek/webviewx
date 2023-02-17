@@ -1,12 +1,16 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webviewx/src/utils/utils.dart';
 
-import 'package:webview_flutter/platform_interface.dart' as wf_pi;
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart'
+    as wf_pi;
 import 'package:webview_flutter/webview_flutter.dart' as wf;
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart'
+    as wviOS;
+import 'package:webview_flutter_android/webview_flutter_android.dart'
+    as wvAndroid;
 
 import 'package:webviewx/src/view/interface.dart' as view_interface;
 import 'package:webviewx/src/controller/interface.dart' as ctrl_interface;
@@ -143,36 +147,40 @@ class _WebViewXState extends State<WebViewX> {
   void initState() {
     super.initState();
 
-    if (Platform.isAndroid &&
-        widget.mobileSpecificParams.androidEnableHybridComposition) {
-      wf.WebView.platform = wf.SurfaceAndroidWebView();
-    }
-
     _ignoreAllGestures = widget.ignoreAllGestures;
     webViewXController = _createWebViewXController();
   }
 
   @override
   Widget build(BuildContext context) {
-    final javascriptMode = widget.javascriptMode == JavascriptMode.unrestricted
-        ? wf.JavascriptMode.unrestricted
-        : wf.JavascriptMode.disabled;
+    late final wf.PlatformWebViewControllerCreationParams params;
+    if (wf.WebViewPlatform.instance is wviOS.WebKitWebViewPlatform) {
+      params = wviOS.WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <wviOS.PlaybackMediaTypes>{},
+      );
+    } else {
+      params = const wf.PlatformWebViewControllerCreationParams();
+    }
 
-    final initialMediaPlaybackPolicy = widget.initialMediaPlaybackPolicy ==
-            AutoMediaPlaybackPolicy.alwaysAllow
-        ? wf.AutoMediaPlaybackPolicy.always_allow
-        : wf.AutoMediaPlaybackPolicy.require_user_action_for_all_media_types;
+    originalWebViewController =
+        wf.WebViewController.fromPlatformCreationParams(params);
+
+    if (originalWebViewController.platform
+        is wvAndroid.AndroidWebViewController) {
+      wvAndroid.AndroidWebViewController.enableDebugging(true);
+      (originalWebViewController.platform as wvAndroid.AndroidWebViewController)
+          .setMediaPlaybackRequiresUserGesture(false);
+    }
 
     void onWebResourceError(wf_pi.WebResourceError err) =>
         widget.onWebResourceError!(
           WebResourceError(
             description: err.description,
             errorCode: err.errorCode,
-            domain: err.domain,
             errorType: WebResourceErrorType.values.singleWhere(
               (value) => value.toString() == err.errorType.toString(),
             ),
-            failingUrl: err.failingUrl,
           ),
         );
 
@@ -189,7 +197,7 @@ class _WebViewXState extends State<WebViewX> {
         NavigationRequest(
           content: NavigationContent(
               request.url, webViewXController.value.sourceType),
-          isForMainFrame: request.isForMainFrame,
+          isForMainFrame: request.isMainFrame,
         ),
       );
 
@@ -207,54 +215,54 @@ class _WebViewXState extends State<WebViewX> {
       }
     }
 
-    void onWebViewCreated(wf.WebViewController webViewController) {
-      originalWebViewController = webViewController;
-
-      webViewXController.connector = originalWebViewController;
-      // Calls onWebViewCreated to pass the refference upstream
-      if (widget.onWebViewCreated != null) {
-        widget.onWebViewCreated!(webViewXController);
-      }
+    for (final cb in widget.dartCallBacks) {
+      originalWebViewController.addJavaScriptChannel(
+        cb.name,
+        onMessageReceived: (msg) => cb.callBack(msg.message),
+      );
     }
 
-    final javascriptChannels = widget.dartCallBacks
-        .map(
-          (cb) => wf.JavascriptChannel(
-            name: cb.name,
-            onMessageReceived: (msg) => cb.callBack(msg.message),
-          ),
-        )
-        .toSet();
+    webViewXController.connector = originalWebViewController;
+    // Calls onWebViewCreated to pass the refference upstream
+    if (widget.onWebViewCreated != null) {
+      widget.onWebViewCreated!(webViewXController);
+    }
+
+    originalWebViewController
+      ..setJavaScriptMode(widget.javascriptMode == JavascriptMode.unrestricted
+          ? wf.JavaScriptMode.unrestricted
+          : wf.JavaScriptMode.disabled)
+      ..setNavigationDelegate(
+        wf.NavigationDelegate(
+          onPageStarted: widget.onPageStarted,
+          onPageFinished: widget.onPageFinished,
+          onWebResourceError: onWebResourceError,
+          onNavigationRequest: (request) => navigationDelegate(request),
+
+        ),
+      )..setUserAgent(widget.userAgent);
+
+    // gestureRecognizers: widget.mobileSpecificParams.mobileGestureRecognizers,
+    // gestureNavigationEnabled: widget.mobileSpecificParams.gestureNavigationEnabled,
+    // debuggingEnabled: widget.mobileSpecificParams.debuggingEnabled,
+
+    originalWebViewController.loadRequest(Uri.parse(_initialContent()));
 
     return SizedBox(
       width: widget.width,
       height: widget.height,
       child: IgnorePointer(
         ignoring: _ignoreAllGestures,
-        child: wf.WebView(
+        child: wf.WebViewWidget(
           key: widget.key,
-          initialUrl: _initialContent(),
-          javascriptMode: javascriptMode,
-          onWebViewCreated: onWebViewCreated,
-          javascriptChannels: javascriptChannels,
-          gestureRecognizers:
-              widget.mobileSpecificParams.mobileGestureRecognizers,
-          onPageStarted: widget.onPageStarted,
-          onPageFinished: widget.onPageFinished,
-          initialMediaPlaybackPolicy: initialMediaPlaybackPolicy,
-          onWebResourceError: onWebResourceError,
-          gestureNavigationEnabled:
-              widget.mobileSpecificParams.gestureNavigationEnabled,
-          debuggingEnabled: widget.mobileSpecificParams.debuggingEnabled,
-          navigationDelegate: navigationDelegate,
-          userAgent: widget.userAgent,
+          controller: originalWebViewController,
         ),
       ),
     );
   }
 
   // Returns initial data
-  String? _initialContent() {
+  String _initialContent() {
     if (widget.initialSourceType == SourceType.html) {
       return HtmlUtils.preprocessSource(
         widget.initialContent,
@@ -294,9 +302,9 @@ class _WebViewXState extends State<WebViewX> {
   void _handleChange() {
     final newModel = webViewXController.value;
 
-    originalWebViewController.loadUrl(
-      _prepareContent(newModel),
-      headers: newModel.headers,
+    originalWebViewController.loadRequest(
+      Uri.parse(_prepareContent(newModel)),
+      headers: newModel.headers ?? const {},
     );
   }
 

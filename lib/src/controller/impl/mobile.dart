@@ -119,17 +119,12 @@ class WebViewXController extends ChangeNotifier
     String name,
     List<dynamic> params,
   ) async {
-    // This basically will transform a "raw" call (evaluateJavascript)
-    // into a little bit more "typed" call, that is - calling a method.
-    final result = await connector.evaluateJavascript(
+
+    // todo: check if this is correct
+    // Run javascript that is transformed from a list and name to a function
+    return connector.runJavaScriptReturningResult(
       HtmlUtils.buildJsFunction(name, params),
     );
-
-    // (MOBILE ONLY) Unquotes response if necessary
-    //
-    // In the mobile version responses from Js to Dart come wrapped in single quotes (')
-    // The web works fine because it is already into it's native environment
-    return HtmlUtils.unQuoteJsResponseIfNeeded(result);
   }
 
   /// This function allows you to evaluate 'raw' javascript (e.g: 2+2)
@@ -143,8 +138,9 @@ class WebViewXController extends ChangeNotifier
   Future<dynamic> evalRawJavascript(
     String rawJavascript, {
     bool inGlobalContext = false, // NO-OP HERE
-  }) {
-    return connector.evaluateJavascript(rawJavascript);
+  }) async {
+    // todo: figure this out
+    return ''; //connector.evaluateJavascript(rawJavascript);
   }
 
   /// Returns the current content
@@ -205,14 +201,16 @@ class WebViewXController extends ChangeNotifier
 
   /// Get scroll position on X axis
   @override
-  Future<int> getScrollX() {
-    return connector.getScrollX();
+  Future<int> getScrollX() async {
+    final position = await connector.getScrollPosition();
+    return position.dx.toInt();
   }
 
   /// Get scroll position on Y axis
   @override
-  Future<int> getScrollY() {
-    return connector.getScrollY();
+  Future<int> getScrollY() async {
+    final position = await connector.getScrollPosition();
+    return position.dy.toInt();
   }
 
   /// Scrolls by `x` on X axis and by `y` on Y axis
